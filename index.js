@@ -1,49 +1,58 @@
 
-var Bleacon = require('bleacon');
-var md5 = require('md5');
-const Nomad = require('nomad-stream');
+const Bleacon = require('bleacon');
+const config = require('./config');
+const express = require('express');
 
-var express = require('express')
-var app = express()
+const app = express();
 
 app.use(express.static('public'));
 
+const SIGHTING_INTERVAL = 3.5;
+const IDENTIFIER = '1111111111111111111111111111111';
 
 
-const nomad = new Nomad();
+let beaconSightings = [];
 
-var visibleBeacons = {};
 
-setInterval(()=>{
-  visibleBeacons = {};
-},1000);
+setInterval(() => {
+  console.log('PRUNING');
+  beaconSightings = beaconSightings.reduce((result, sighting) => {
+    if (sighting.time < new Date() - (SIGHTING_INTERVAL * 1000)) {
+      return result;
+    }
+    return result.concat([sighting]);
+  }, []);
+}, 500);
 
-var uuid;
 
-console.log('starting nomad...');
+const uuid = Array(31).fill('1').concat([config.deviceID || 'A']).join('');
 
-nomad.prepareToPublish().then(function(nomadInstance) {
-  console.log('nomad up at', nomadInstance.identity.ID);
+console.log('starting beacon at', uuid);
 
-  uuid = md5(nomadInstance.identity.ID);
-
-  console.log('starting beacon at', uuid);
-
-  Bleacon.startAdvertising(uuid);
-  Bleacon.startScanning();
-  Bleacon.on('discover', function(beacon) {
-    visibleBeacons[beacon.uuid] = beacon;
-  });
+Bleacon.startAdvertising(uuid);
+Bleacon.startScanning();
+Bleacon.on('discover', (beacon) => {
+  console.log('BEACON', beacon);
+  if (
+    (beacon.proximity === 'near' || beacon.proximity === 'immediate') &&
+      beacon.uuid.includes(IDENTIFIER)
+  ) {
+    beaconSightings.push({
+      uuid: beacon.uuid.replace(IDENTIFIER, ''),
+      time: Number(new Date()),
+    });
+  }
 });
 
 
-app.get('/devices', function(req, res){
+app.get('/devices', (req, res) => {
+  console.log('SIGHTING UUIDs', beaconSightings.map(sighting => sighting.uuid));
   res.json({
-    visibleBeacons: visibleBeacons,
-    id: uuid
+    visibleBeacons: [...new Set(beaconSightings.map(sighting => sighting.uuid))],
+    id: uuid,
   });
 });
 
-app.listen(3000, function () {
-  console.log('listening on port 3000!')
-})
+app.listen(3000, () => {
+  console.log('listening on port 3000!');
+});
